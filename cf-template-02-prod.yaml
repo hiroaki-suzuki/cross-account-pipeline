@@ -1,0 +1,141 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: A sample template for cross account deploy
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: hs-cross-02
+  RepositoryAccountId:
+    Type: String
+    MaxLength: 12
+    MinLength: 12
+  KmsArrowIAMUserName:
+    Type: String
+
+Resources:
+  # CodePipeline用S3バケット
+  PipelineArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Join [ "-", [ !Ref ProjectName, "pipeline", "artifacts", "bucket" ] ]
+      VersioningConfiguration:
+        Status: Enabled
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  PipelineArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PipelineArtifactsBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - s3:PutObject
+            Effect: Deny
+            Principal: "*"
+            Resource:
+              - !Sub ${PipelineArtifactsBucket.Arn}
+              - !Sub ${PipelineArtifactsBucket.Arn}/*
+            Condition:
+              StringNotEquals:
+                s3:x-amz-server-side-encryption: aws:kms
+          - Action:
+              - s3:*
+            Effect: Deny
+            Principal: "*"
+            Resource:
+              - !Sub ${PipelineArtifactsBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - Action:
+              - s3:Get*
+              - s3:Put*
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${RepositoryAccountId}:root
+            Resource:
+              - !Sub ${PipelineArtifactsBucket.Arn}/*
+          - Action:
+              - s3:ListBucket
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${RepositoryAccountId}:root
+            Resource:
+              - !Sub ${PipelineArtifactsBucket.Arn}
+  PipelineKmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: key-default-1
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: Allow access for Key Administrators
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/${KmsArrowIAMUserName}
+            Action:
+              - kms:Create*
+              - kms:Describe*
+              - kms:Enable*
+              - kms:List*
+              - kms:Put*
+              - kms:Update*
+              - kms:Revoke*
+              - kms:Disable*
+              - kms:Get*
+              - kms:Delete*
+              - kms:TagResource
+              - kms:UntagResource
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+            Resource: "*"
+          - Sid: Allow use of the key
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${RepositoryAccountId}:root
+            #                - !GetAtt PipelineRole.Arn
+            #                - !GetAtt DeployRole.Arn
+            Action:
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey
+              - kms:GenerateDataKeyWithoutPlaintext
+            Resource: "*"
+          - Sid: Allow attachment of persistent resources
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${RepositoryAccountId}:root
+            #                - !GetAtt PipelineRole.Arn
+            #                - !GetAtt DeployRole.Arn
+            Action:
+              - kms:CreateGrant
+              - kms:ListGrants
+              - kms:RevokeGrant
+            Resource: "*"
+            Condition:
+              Bool:
+                kms:GrantIsForAWSResource: true
+  PipelineKmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${ProjectName}-pipeline-cms-key
+      TargetKeyId: !Ref PipelineKmsKey
