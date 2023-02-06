@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: A sample template for cross account deploy
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: hs-cross-01
+  CidrBlockVPC:
+    Type: String
+    Default: 172.16.0.0/16
+  CidrBlockSubnet:
+    Type: String
+    Default: 172.16.0.0/24
+
+Resources:
+  # ネットワーク
+  VPC:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./cf-template-01-network.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        CidrBlockVPC: !Ref CidrBlockVPC
+        CidrBlockSubnet: !Ref CidrBlockSubnet
+  # セキュリティグループ
+  SecurityGroup:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./cf-template-01-security-group.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        VPCId: !GetAtt VPC.Outputs.VPCId
+  # アプリ用EC2
+  AppEC2:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./cf-template-01-ec2.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        SubnetId: !GetAtt VPC.Outputs.SubnetId
+        SecurityGroupId: !GetAtt SecurityGroup.Outputs.PublicSecurityGroupId
+
+Outputs:
+  VPCId:
+    Value: !GetAtt VPC.Outputs.VPCId
+    Description: VPC CIDR Block
+
+  SubnetID:
+    Value: !GetAtt VPC.Outputs.SubnetId
+    Description: Subnet CIDR Block
+
+  SecurityGroupId:
+      Value: !GetAtt SecurityGroup.Outputs.PublicSecurityGroupId
+      Description: Public subnet security group
