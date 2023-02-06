@@ -17,7 +17,7 @@ Resources:
   VPC:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: ./cf-template-01-network.yaml
+      TemplateURL: ./cf-template-01-prod-network.yaml
       Parameters:
         ProjectName: !Ref ProjectName
         CidrBlockVPC: !Ref CidrBlockVPC
@@ -26,7 +26,7 @@ Resources:
   SecurityGroup:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: ./cf-template-01-security-group.yaml
+      TemplateURL: ./cf-template-01-prod-security-group.yaml
       Parameters:
         ProjectName: !Ref ProjectName
         VPCId: !GetAtt VPC.Outputs.VPCId
@@ -34,7 +34,7 @@ Resources:
   AppEC2:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: ./cf-template-01-ec2.yaml
+      TemplateURL: ./cf-template-01-prod-ec2.yaml
       Parameters:
         ProjectName: !Ref ProjectName
         SubnetId: !GetAtt VPC.Outputs.SubnetId
