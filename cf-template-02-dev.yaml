@@ -71,3 +71,9 @@ Resources:
               - codecommit:CancelUploadArchive
             Resource:
               - !GetAtt AppRepository.Arn
+
+Outputs:
+  AppRepositoryName:
+    Value: !GetAtt AppRepository.Name
+  PipelineSourceRoleArn:
+    Value: !GetAtt PipelineSourceRole.Arn

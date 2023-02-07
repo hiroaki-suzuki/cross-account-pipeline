@@ -1,0 +1,180 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: A sample template for cross account deploy
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: hs-cross-01
+  CidrBlockVPC:
+    Type: String
+    Default: 172.16.0.0/16
+  CidrBlockSubnet:
+    Type: String
+    Default: 172.16.0.0/24
+  PipelineKmsKeyArn:
+    Type: String
+
+Resources:
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref CidrBlockVPC
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, "vpc" ] ]
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, "igw" ] ]
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  # Subnet
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref CidrBlockSubnet
+      AvailabilityZone: ap-northeast-1a
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, "public", "subnet" ] ]
+  # RouteTable
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, "public", "rtb" ] ]
+  RouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref Subnet
+  RoutePublic:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+  # セキュリティグループ
+  PublicSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Join [ "-", [ !Ref ProjectName, "public", "sg" ] ]
+      GroupDescription: "Public security group"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref AWS::StackName, "public", "sg" ] ]
+  # アプリ用EC2
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join [ "-", [ !Ref ProjectName, "app", "ec2", "role" ] ]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/EC2InstanceConnect
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforAWSCodeDeploy
+      Policies:
+        - PolicyName: kms
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:DescribeKey
+                  - kms:GenerateDataKey*
+                  - kms:Encrypt
+                  - kms:ReEncrypt*
+                  - kms:Decrypt
+                Resource:
+                  - !Ref PipelineKmsKeyArn
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2Role
+  EC2:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          packages:
+            yum:
+              httpd: [ ]
+              ruby: [ ]
+          services:
+            sysvinit:
+              httpd:
+                enabled: true
+                ensureRunning: true
+                files:
+                  - "/etc/httpd/httpd.conf"
+                sources:
+                  - "/var/www/html"
+          files:
+            /var/www/html/index.html:
+              content: !Sub |
+                It works! ${AWS::StackName}!!
+              mode: "000600"
+              owner: "apache"
+              group: "apache"
+            /home/ec2-user/install:
+              source: !Sub https://aws-codedeploy-${AWS::Region}.s3.amazonaws.com/latest/install
+              mode: "000755"
+          commands:
+            00-install-agent:
+              command: ./install auto
+              cwd: /home/ec2-user/
+            01-cfn-signal:
+              command: /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource EC2 --region ${AWS::Region}
+    Properties:
+      ImageId: "ami-0bba69335379e17f8"
+      InstanceType: t2.micro
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId: !Ref Subnet
+          GroupSet:
+            - !Ref PublicSecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      KeyName: aws-rirazou0101
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, "app", "ec2" ] ]
+        - Key: Deploy
+          Value: CrossPipelineApp
+      UserData:
+        Fn::Base64:
+          !Sub |
+          #!/bin/bash -xe
+          yum -y update
+          yum -y install aws-cfn-bootstrap
+          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource EC2 --region ${AWS::Region}

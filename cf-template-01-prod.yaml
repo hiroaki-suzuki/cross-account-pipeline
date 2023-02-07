@@ -4,51 +4,223 @@ Description: A sample template for cross account deploy
 Parameters:
   ProjectName:
     Type: String
-    Default: hs-cross-01
-  CidrBlockVPC:
+    Default: hs-cross-02
+  DevelopAccountId:
     Type: String
-    Default: 172.16.0.0/16
-  CidrBlockSubnet:
+    MaxLength: 12
+    MinLength: 12
+  KmsArrowIAMUserName:
     Type: String
-    Default: 172.16.0.0/24
 
 Resources:
-  # ネットワーク
-  VPC:
-    Type: AWS::CloudFormation::Stack
+  # CodePipeline用ロール
+  PipelineRole:
+    Type: AWS::IAM::Role
     Properties:
-      TemplateURL: ./cf-template-01-prod-network.yaml
-      Parameters:
-        ProjectName: !Ref ProjectName
-        CidrBlockVPC: !Ref CidrBlockVPC
-        CidrBlockSubnet: !Ref CidrBlockSubnet
-  # セキュリティグループ
-  SecurityGroup:
-    Type: AWS::CloudFormation::Stack
+      RoleName: !Join [ "-", [ !Ref ProjectName, "pipeline", "role" ] ]
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+  PipelinePolicy:
+    Type: AWS::IAM::Policy
     Properties:
-      TemplateURL: ./cf-template-01-prod-security-group.yaml
-      Parameters:
-        ProjectName: !Ref ProjectName
-        VPCId: !GetAtt VPC.Outputs.VPCId
-  # アプリ用EC2
-  AppEC2:
-    Type: AWS::CloudFormation::Stack
+      PolicyName: !Join [ "-", [ !Ref ProjectName, "pipeline", "policy" ] ]
+      Roles:
+        - !Ref PipelineRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Resource:
+              - !Sub arn:aws:iam::${DevelopAccountId}:role/*
+          - Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource:
+              - "*"
+            Condition:
+              StringEqualsIfExists:
+                iam:PassedToService:
+                  - cloudformation.amazonaws.com
+          - Effect: Allow
+            Action:
+              - s3:*
+            Resource:
+              - !Sub ${PipelineArtifactsBucket.Arn}/*
+          - Effect: Allow
+            Action:
+              - codecommit:*
+            Resource:
+              - "*"
+          - Effect: Allow
+            Action:
+              - codedeploy:*
+            Resource:
+              - "*"
+          - Effect: Allow
+            Action:
+              - ec2:*
+              - cloudwatch:*
+            Resource:
+              - "*"
+  DeployRole:
+    Type: AWS::IAM::Role
     Properties:
-      TemplateURL: ./cf-template-01-prod-ec2.yaml
-      Parameters:
-        ProjectName: !Ref ProjectName
-        SubnetId: !GetAtt VPC.Outputs.SubnetId
-        SecurityGroupId: !GetAtt SecurityGroup.Outputs.PublicSecurityGroupId
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codedeploy.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+  # CodePipeline用S3バケット
+  PipelineArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Join [ "-", [ !Ref ProjectName, "pipeline", "artifacts", "bucket" ] ]
+      VersioningConfiguration:
+        Status: Enabled
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  PipelineArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PipelineArtifactsBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - s3:PutObject
+            Effect: Deny
+            Principal: "*"
+            Resource:
+              - !Sub ${PipelineArtifactsBucket.Arn}
+              - !Sub ${PipelineArtifactsBucket.Arn}/*
+            Condition:
+              StringNotEquals:
+                s3:x-amz-server-side-encryption: aws:kms
+          - Action:
+              - s3:*
+            Effect: Deny
+            Principal: "*"
+            Resource:
+              - !Sub ${PipelineArtifactsBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - Action:
+              - s3:Get*
+              - s3:Put*
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${DevelopAccountId}:root
+            Resource:
+              - !Sub ${PipelineArtifactsBucket.Arn}/*
+          - Action:
+              - s3:ListBucket
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${DevelopAccountId}:root
+            Resource:
+              - !Sub ${PipelineArtifactsBucket.Arn}
+  PipelineKmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      PendingWindowInDays: 7
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: key-default-1
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: Allow access for Key Administrators
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/${KmsArrowIAMUserName}
+            Action:
+              - kms:Create*
+              - kms:Describe*
+              - kms:Enable*
+              - kms:List*
+              - kms:Put*
+              - kms:Update*
+              - kms:Revoke*
+              - kms:Disable*
+              - kms:Get*
+              - kms:Delete*
+              - kms:TagResource
+              - kms:UntagResource
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+            Resource: "*"
+          - Sid: Allow use of the key
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${DevelopAccountId}:root
+                - !GetAtt PipelineRole.Arn
+                - !GetAtt DeployRole.Arn
+            Action:
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey
+              - kms:GenerateDataKeyWithoutPlaintext
+            Resource: "*"
+          - Sid: Allow attachment of persistent resources
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${DevelopAccountId}:root
+                - !GetAtt PipelineRole.Arn
+                - !GetAtt DeployRole.Arn
+            Action:
+              - kms:CreateGrant
+              - kms:ListGrants
+              - kms:RevokeGrant
+            Resource: "*"
+            Condition:
+              Bool:
+                kms:GrantIsForAWSResource: true
+  PipelineKmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${ProjectName}-pipeline-cms-key
+      TargetKeyId: !Ref PipelineKmsKey
 
 Outputs:
-  VPCId:
-    Value: !GetAtt VPC.Outputs.VPCId
-    Description: VPC CIDR Block
-
-  SubnetID:
-    Value: !GetAtt VPC.Outputs.SubnetId
-    Description: Subnet CIDR Block
-
-  SecurityGroupId:
-      Value: !GetAtt SecurityGroup.Outputs.PublicSecurityGroupId
-      Description: Public subnet security group
+  PipelineArtifactsBucketArn:
+    Value: !GetAtt PipelineArtifactsBucket.Arn
+  PipelineArtifactsBucketName:
+    Value: !Ref PipelineArtifactsBucket
+  PipelineKmsKeyArn:
+    Value: !GetAtt PipelineKmsKey.Arn
+  PipelineRoleArn:
+    Value: !GetAtt PipelineRole.Arn
+  DeployRoleArn:
+    Value: !GetAtt DeployRole.Arn

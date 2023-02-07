@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: A sample template for cross account deploy
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: hs-cross-03
+  PipelineArtifactsBucketName:
+    Type: String
+  PipelineKmsKeyArn:
+    Type: String
+  PipelineRoleArn:
+    Type: String
+  DeployRoleArn:
+    Type: String
+  AppRepositoryName:
+    Type: String
+  PipelineSourceRoleArn:
+    Type: String
+
+Resources:
+  # CodeDeploy
+  AppCodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Join [ "-", [ !Ref ProjectName, "app" ] ]
+      ComputePlatform: Server
+  AppCodeDeployDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref AppCodeDeployApplication
+      Ec2TagFilters:
+        - Type: KEY_AND_VALUE
+          Key: Deploy
+          Value: CrossPipelineApp
+      ServiceRoleArn: !Ref DeployRoleArn
+  # CodePipeline
+  AppCodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Join [ "-", [ !Ref ProjectName, "app", "pipeline" ] ]
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineArtifactsBucketName
+        EncryptionKey:
+          Type: KMS
+          Id: !Ref PipelineKmsKeyArn
+      RoleArn: !Ref PipelineRoleArn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Version: 1
+                Provider: CodeCommit
+                Category: Source
+                Owner: AWS
+              Configuration:
+                RepositoryName: !Ref AppRepositoryName
+                BranchName: master
+                PollForSourceChanges: false
+              InputArtifacts: [ ]
+              OutputArtifacts:
+                - Name: SourceOutput
+              RunOrder: 1
+              RoleArn: !Ref PipelineSourceRoleArn
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: 1
+                Provider: CodeDeploy
+              Configuration:
+                ApplicationName: !Ref AppCodeDeployApplication
+                DeploymentGroupName: !Ref AppCodeDeployDeploymentGroup
+              InputArtifacts:
+                - Name: SourceOutput
+              RunOrder: 1
