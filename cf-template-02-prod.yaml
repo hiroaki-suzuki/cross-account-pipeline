@@ -13,6 +13,57 @@ Parameters:
     Type: String
 
 Resources:
+  # CodePipeline用ロール
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join [ "-", [ !Ref ProjectName, "pipeline", "role" ] ]
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+  PipelinePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Join [ "-", [ !Ref ProjectName, "pipeline", "policy" ] ]
+      Roles:
+        - !Ref PipelineRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Resource:
+              - !Sub arn:aws:iam::${RepositoryAccountId}:role/*
+          - Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource:
+              - "*"
+            Condition:
+              StringEqualsIfExists:
+                iam:PassedToService:
+                  - cloudformation.amazonaws.com
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codedeploy.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
   # CodePipeline用S3バケット
   PipelineArtifactsBucket:
     Type: AWS::S3::Bucket
@@ -110,8 +161,8 @@ Resources:
             Principal:
               AWS:
                 - !Sub arn:aws:iam::${RepositoryAccountId}:root
-            #                - !GetAtt PipelineRole.Arn
-            #                - !GetAtt DeployRole.Arn
+                - !GetAtt PipelineRole.Arn
+                - !GetAtt DeployRole.Arn
             Action:
               - kms:DescribeKey
               - kms:Encrypt
@@ -125,8 +176,8 @@ Resources:
             Principal:
               AWS:
                 - !Sub arn:aws:iam::${RepositoryAccountId}:root
-            #                - !GetAtt PipelineRole.Arn
-            #                - !GetAtt DeployRole.Arn
+                - !GetAtt PipelineRole.Arn
+                - !GetAtt DeployRole.Arn
             Action:
               - kms:CreateGrant
               - kms:ListGrants
@@ -140,3 +191,9 @@ Resources:
     Properties:
       AliasName: !Sub alias/${ProjectName}-pipeline-cms-key
       TargetKeyId: !Ref PipelineKmsKey
+
+Outputs:
+  PipelineArtifactsBucketArn:
+    Value: !GetAtt PipelineArtifactsBucket.Arn
+  PipelineKmsKeyArn:
+    Value: !GetAtt PipelineKmsKey.Arn
