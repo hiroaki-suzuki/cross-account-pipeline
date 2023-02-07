@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: A sample template for cross account deploy
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: hs-cross-03
+  ProductionAccountId:
+    Type: String
+    MaxLength: 12
+    MinLength: 12
+  PipelineArtifactsBucketArn:
+    Type: String
+  PipelineKmsKeyArn:
+    Type: String
+
+Resources:
+  # 本番環境デプロイ対象のリポジトリ
+  AppRepository:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: !Join [ "-", [ !Ref ProjectName, "app" ] ]
+  # CodePipelineのSourceステージで指定するロール
+  # 本番環境のアーティファクト用S3、KMS、開発環境のCodeCommit（上記のAppRepository）の操作権限
+  PipelineSourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join [ "-", [ !Ref ProjectName, "pipeline", "source", "role" ] ]
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${ProductionAccountId}:root
+            Action:
+              - sts:AssumeRole
+  PipelineSourcePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Join [ "-", [ !Ref ProjectName, "pipeline", "source", "policy" ] ]
+      Roles:
+        - !Ref PipelineSourceRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          # 本番環境にあるパイプラインアーティファクト用のバケットの操作権限
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:PutObjectAcl
+            Resource:
+              - !Sub ${PipelineArtifactsBucketArn}/*
+          # 本番環境にあるパイプライン用暗号化キーの操作権限
+          - Effect: Allow
+            Action:
+              - kms:DescribeKey
+              - kms:GenerateDataKey*
+              - kms:Encrypt
+              - kms:ReEncrypt*
+              - kms:Decrypt
+            Resource:
+              - !Ref PipelineKmsKeyArn
+          # 開発環境にあるCodeCommitの操作権限（上記のAppRepository）
+          - Effect: Allow
+            Action:
+              - codecommit:GetBranch
+              - codecommit:GetCommit
+              - codecommit:UploadArchive
+              - codecommit:GetUploadArchiveStatus
+              - codecommit:CancelUploadArchive
+            Resource:
+              - !GetAtt AppRepository.Arn
